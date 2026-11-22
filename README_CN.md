@@ -1,3 +1,4 @@
+<p align="center"><img src="nls/assets/nax-lang-icon.svg" width="120" alt="Nax logo"></p>
 
 # nax 编程语言
   
@@ -6,13 +7,14 @@
 ## 特性
 
 - 轻量、简洁、一致性的语法设计，轻松掌握并快速上手使用
-- 强类型、静态分析与编译、内存安全、异常处理，轻松编写安全可靠的软件
+- 强类型、静态分析与编译、内存安全，用 errdef 与 catch 把错误当作值来处理，轻松编写安全可靠的软件
 - 内置并发原语 go/future/channel/select
 - 完善的类型系统，支持 generics、enum、tagged union、interface、nullable(?)、errable(!)
 - 直接编译为目标平台的机器码，不依赖 LLVM，并支持交叉编译
-- 部署简单，高效编译，基于 musl libc 进行静态链接，具备良好的跨平台特性
+- 部署简单，高效编译，内置各目标平台的 sysroot，并静态链接第三方运行时
 - 高性能 C FFI 实现，无性能损耗调用 C 标准库函数
 - 高性能 GC 实现，具有非常短暂的 STW (Stop The World)
+- X 模式：`.x` 源文件不使用 GC、协程和 runtime，通过显式的分配器管理内存，`.n` 代码可以直接调用
 - 高性能内存分配器实现，参考 tcmalloc
 - 高性能共享栈协程实现，每秒能够进行数百万次的协程切换
 - 基于 libuv 实现的高性能 IO
@@ -26,13 +28,13 @@
 
 > nax 原名 nature，现已更名为 nax。
 
-nax 编程语言已经达到早期可用版本，核心语法已添加完成。待完成的关键特性有 unsafe 运行模式，LLM 编码适配，C target 适配，WASM3.0 target 适配。
+nax 编程语言已经达到早期可用版本，核心语法已添加完成。面向系统编程、不使用 GC 的 X 模式已完成第一版。待完成的关键特性有 LLM 编码适配、C target 和 WASM 3.0 target。
 
-当前版本编译目标架构包含 linux_amd64、linux_arm64、linux_riscv64、darwin_amd64、darwin_arm64。
+当前版本编译目标架构包含 linux_amd64、linux_arm64、linux_riscv64、darwin_amd64、darwin_arm64、windows_amd64。
 
 nax 包含一组测试用例和标准库用来测试基本功能和语法的可用性，包含一组中小型项目测试整体可用性，还未经过大型的项目测试。
  
-官网 https://naxlang.org
+官网 https://naxlang.org/cn
 
 ## 安装  
   
@@ -64,23 +66,60 @@ fn main() {
 
 hello nax
 ```
-  
+
+在支持的主机上交叉编译 Windows x64 控制台程序：
+
+```sh
+nax build --target windows_amd64 main.n
+```
+
+这会使用 nax 内置的 COFF/PE 链接器和自带的 Windows sysroot 生成 `main.exe`，最终用户的构建过程不需要 Clang、LLD、MSVC、Windows SDK、MinGW 或 Zig。
+
+## X 模式
+
+`.x` 文件以 X 模式编译：不使用 GC，没有协程，也不启动 runtime。内存来自显式的分配器，例如 `allocator.arena`。
+
+```js
+// main.x
+import allocator.arena
+
+type book_t = struct{
+    string title
+    int pages
+}
+
+fn main() {
+    var ar = arena.init(4096)
+    defer ar.deinit()
+
+    var b = ar.new(book_t{title: 'nax', pages: 42})
+    println(b.title, b.pages)
+}
+```
+
+```sh
+> nax build main.x && ./main
+nax 42
+```
+
+`.n` 代码可以 import 并调用 `.x` 代码；`.x` 代码不能调用 `.n` 函数。在 `.x` 中可以使用内置函数（print、println、panic、assert）、`libc` 和 `allocator`。捕获变量的闭包、作为值使用的函数、`go`、`chan` 和 `select` 会在编译期报错。
+
 ## 文档  
 
-快速开始 https://naxlang.org/docs/get-started
+快速开始 https://naxlang.org/cn/docs/get-started
 
-语法文档 https://naxlang.org/docs/syntax
+语法文档 https://naxlang.org/cn/docs/syntax
 
-标准库文档 https://naxlang.org/stds/co
+标准库文档 https://naxlang.org/cn/stds/co
 
-在线试用 https://naxlang.org/playground
+在线试用 https://naxlang.org/cn/playground
 
 
 ## 示例
 
 mysql/postgresql/redis 驱动 https://github.com/weiwenhao/dbdriver
 
-sqlite 驱动 https://github.com/weiwenhao/nax-sqlite
+sqlite 驱动 https://github.com/weiwenhao/nature-sqlite
 
 API 框架 https://github.com/weiwenhao/emoji-api
 
@@ -90,7 +129,7 @@ Llama2 推理模型实现 https://github.com/weiwenhao/llama.n
 
 基于 raylib 实现的俄罗斯方块 https://github.com/weiwenhao/tetris
 
-Nax WebView 库 https://github.com/wzzc-dev/nax-webview
+Nax WebView 库 https://github.com/wzzc-dev/nature-webview
 
 更多语法示例 https://github.com/naxlang/nax/tree/master/tests/features/cases
 
@@ -98,7 +137,7 @@ Nax WebView 库 https://github.com/wzzc-dev/nax-webview
 
 nax 编程语言是一款轻量简单，易于学习的编程语言，在设计理念和 runtime 架构上参考了 golang。
 
-nax 在语法设计上注重内存安全，有着完善的类型系统支持以及方便的错误处理方式，以文件作为 module 单位，采用基于 package.toml 的集中式包管理方式。
+nax 在语法设计上注重内存安全，有着完善的类型系统支持以及方便的错误处理方式，以文件（或用 `mod` 声明的目录）作为 module 单位，采用基于 package.toml 的集中式包管理方式。
 
 nax 原生支持并发原语 go+select+channel，在高并发 IO 应用上有着非常优秀的并发表现。正式版本发布时性能将会得到进一步提升。
 
@@ -161,11 +200,11 @@ Linux Ubuntu 虚拟机（内核版本 6.17.8，aarch64 架构, Mac M4 芯片, 9 
 
 部署指南 https://github.com/naxlang/nax/blob/master/DEVELOPMENT.md
 
-贡献指南 https://naxlang.org/docs/contribute
+贡献指南 https://naxlang.org/cn/docs/contribute
 
 待办事项  https://github.com/naxlang/nax/issues/131
 
 
 ## License  
   
-本项目的编译器前端、后端、runtime 等项目源码受 Apache License (Version 2.0) 保护。当前项目中包含的 nax 源码文件(.n) 如标准库等使用 MIT 许可证。
+本项目的编译器前端、后端、runtime 等项目源码受 Apache License (Version 2.0) 保护。当前项目中包含的 nax 源码文件(.n 和 .x) 如标准库等使用 MIT 许可证。
