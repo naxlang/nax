@@ -986,6 +986,10 @@ static void linear_escape_rewrite(module_t *m, ast_var_decl_t *var_decl, bool fo
         return;
     }
 
+    // the go closure of an .x fn takes copies of what it captures, see linear_fn_decl
+    if (m->is_x && symbol_var->be_capture) {
+        return;
+    }
 
     type_t heap_type = type_refof(symbol_var->type);
     if (symbol_var->type.storage_kind == STORAGE_KIND_IND) {
@@ -1033,7 +1037,8 @@ static lir_operand_t *linear_var_decl(module_t *m, ast_var_decl_t *var_decl) {
     ast_var_decl_t *symbol_var = s->ast_value;
 
     if (var_decl->type.storage_kind == STORAGE_KIND_IND) {
-        if (symbol_var->type.in_heap) {
+        // a value captured in .x stays on the stack, as in linear_escape_rewrite
+        if (symbol_var->type.in_heap && !(m->is_x && symbol_var->be_capture)) {
             uint64_t rtype_hash = type_hash(var->type);
             // 更新类型避免在 lower 被识别成 struct 进行 amd64 下的特殊值传递
             type_t temp_type = var->type;
@@ -4180,6 +4185,60 @@ static lir_operand_t *linear_fn_decl(module_t *m, ast_expr_t expr, lir_operand_t
 
     // symbol label 不能使用 mov 在变量间自由的传递，所以这里将 symbol label 的 addr 加载出来返回
     lir_operand_t *fn_symbol_operand = symbol_label_operand(m, fndef->symbol_name);
+
+    // the go closure of an .x fn lives in one malloc block, which the coroutine frees when the closure returns:
+    // the n_fn_t, its envs_t, the env values, then a copy of each captured value that is not a pointer, which
+    // its env value points to. linear_env_access reads it like a gc env.
+    if (m->is_x && fndef->is_async) {
+        type_t ptr_type = type_kind_new(TYPE_ANYPTR);
+        int64_t count = fndef->capture_exprs->length;
+        int64_t values_offset = sizeof(n_fn_t) + sizeof(envs_t);
+        int64_t copy_offset = values_offset + count * POINTER_SIZE;
+
+        int64_t size = copy_offset;
+        for (int i = 0; i < count; ++i) {
+            ast_expr_t *item = ct_list_value(fndef->capture_exprs, i);
+            if (item->type.storage_kind != STORAGE_KIND_PTR) {
+                size += align_up(item->type.storage_size, POINTER_SIZE);
+            }
+        }
+
+        lir_operand_t *block = temp_var_operand(m, ptr_type);
+        push_rt_call(m, RT_CALL_MALLOC, block, 1, int_operand(size));
+
+        lir_operand_t *envs = lea_operand_pointer(m, indirect_addr_operand(m, ptr_type, block, sizeof(n_fn_t)));
+        OP_PUSH(lir_op_move(indirect_addr_operand(m, ptr_type, block, offsetof(n_fn_t, envs)), envs));
+        lir_operand_t *fn_addr_operand = temp_var_operand(m, ptr_type);
+        OP_PUSH(lir_op_lea(fn_addr_operand, fn_symbol_operand));
+        OP_PUSH(lir_op_move(indirect_addr_operand(m, ptr_type, block, offsetof(n_fn_t, fn_addr)), fn_addr_operand));
+
+        lir_operand_t *values = lea_operand_pointer(m, indirect_addr_operand(m, ptr_type, block, values_offset));
+        OP_PUSH(lir_op_move(indirect_addr_operand(m, ptr_type, envs, offsetof(envs_t, values)), values));
+        OP_PUSH(lir_op_move(indirect_addr_operand(m, type_kind_new(TYPE_UINT64), envs, offsetof(envs_t, length)),
+                            int_operand(count)));
+
+        for (int i = 0; i < count; ++i) {
+            ast_expr_t *item = ct_list_value(fndef->capture_exprs, i);
+            lir_operand_t *value = linear_capture_expr(m, item);
+
+            if (item->type.storage_kind != STORAGE_KIND_PTR) {
+                lir_operand_t *copy_ref = lea_operand_pointer(m, indirect_addr_operand(m, item->type, block, copy_offset));
+                if (item->type.storage_kind == STORAGE_KIND_DIR) {
+                    OP_PUSH(lir_op_move(indirect_addr_operand(m, item->type, block, copy_offset), value));
+                } else {
+                    linear_super_move(m, item->type, copy_ref, value);
+                }
+
+                value = copy_ref;
+                copy_offset += align_up(item->type.storage_size, POINTER_SIZE);
+            }
+
+            OP_PUSH(lir_op_move(indirect_addr_operand(m, ptr_type, values, i * POINTER_SIZE), value));
+        }
+
+        return linear_super_move(m, fndef->type, target, block);
+    }
+
     lir_operand_t *env_operand = int_operand(0);
     if (fndef->capture_exprs->length > 0) {
         // make envs

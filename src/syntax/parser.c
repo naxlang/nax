@@ -3637,6 +3637,8 @@ static ast_expr_t parser_macro_type_eq(module_t *m) {
 static ast_fndef_t *coroutine_fn_closure(module_t *m, ast_expr_t *call_expr) {
     ast_fndef_t *fndef = ast_fndef_new(m, call_expr->line, call_expr->column);
     fndef->is_async = true;
+    // the closure is the entry of a coroutine, so it is .n code even when the go is in an .x file
+    fndef->is_x = false;
     fndef->is_errable = true;
     fndef->symbol_name = NULL;
     fndef->params = ct_list_new(sizeof(ast_var_decl_t));
@@ -3680,6 +3682,7 @@ static ast_fndef_t *coroutine_fn_closure(module_t *m, ast_expr_t *call_expr) {
 static ast_fndef_t *coroutine_fn_void_closure(module_t *m, ast_expr_t *call_expr) {
     ast_fndef_t *fndef = ast_fndef_new(m, call_expr->line, call_expr->column);
     fndef->is_async = true;
+    fndef->is_x = false; // a coroutine entry, as in coroutine_fn_closure
     fndef->is_errable = true;
     fndef->symbol_name = NULL;
     fndef->params = ct_list_new(sizeof(ast_var_decl_t));

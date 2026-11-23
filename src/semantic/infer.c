@@ -1290,6 +1290,57 @@ static type_t infer_new_expr(module_t *m, ast_new_expr_t *new_expr) {
 }
 
 
+// a value the gc manages, or one that can hold such a value
+static bool type_holds_gc_value(type_t t) {
+    switch (t.kind) {
+        case TYPE_STRING:
+        case TYPE_VEC:
+        case TYPE_MAP:
+        case TYPE_SET:
+        case TYPE_REF:
+        case TYPE_FN:
+        case TYPE_CHAN:
+        case TYPE_COROUTINE_T:
+        case TYPE_ANY:
+        case TYPE_INTERFACE:
+            return true;
+        case TYPE_ARR:
+            return type_holds_gc_value(t.array->element_type);
+        case TYPE_TUPLE:
+            for (int i = 0; i < t.tuple->elements->length; ++i) {
+                if (type_holds_gc_value(*(type_t *) ct_list_value(t.tuple->elements, i))) {
+                    return true;
+                }
+            }
+            return false;
+        case TYPE_UNION:
+            for (int i = 0; i < t.union_->elements->length; ++i) {
+                if (type_holds_gc_value(*(type_t *) ct_list_value(t.union_->elements, i))) {
+                    return true;
+                }
+            }
+            return false;
+        case TYPE_STRUCT:
+            for (int i = 0; i < t.struct_->properties->length; ++i) {
+                struct_property_t *p = ct_list_value(t.struct_->properties, i);
+                if (type_holds_gc_value(p->type)) {
+                    return true;
+                }
+            }
+            return false;
+        case TYPE_TAGGED_UNION:
+            for (int i = 0; i < t.tagged_union->elements->length; ++i) {
+                tagged_union_element_t *e = ct_list_value(t.tagged_union->elements, i);
+                if (type_holds_gc_value(e->type)) {
+                    return true;
+                }
+            }
+            return false;
+        default:
+            return false;
+    }
+}
+
 /**
  * change to block expr
  * @param m
@@ -1300,6 +1351,24 @@ static type_t infer_async(module_t *m, ast_expr_t *expr, type_t target_type) {
     ast_macro_async_t *co_expr = expr->value;
 
     type_fn_t *type_fn = infer_call_left(m, co_expr->origin_call, type_kind_new(TYPE_UNKNOWN));
+
+    // go is the only way .x calls .n. the arguments and the result cross in memory the gc does not see
+    if (m->is_x) {
+        INFER_ASSERTF(!type_fn->is_x, "go in .x can only start a .n fn, '%s' is .x",
+                      type_fn->fn_name ? type_fn->fn_name : "lambda");
+
+        // the params, then the value the fn returns
+        int64_t count = type_fn->param_types->length;
+        for (int i = 0; i <= count; ++i) {
+            type_t t = type_fn->return_type;
+            if (i < count) {
+                t = *(type_t *) ct_list_value(type_fn->param_types, i);
+            } else if (is_errable_return(type_fn)) {
+                t = errable_value_type(t);
+            }
+            INFER_ASSERTF(!type_holds_gc_value(t), "go in .x cannot pass or return gc type '%s'", type_format(t));
+        }
+    }
 
     for (int i = 0; i < co_expr->args_copy_stmts->count; ++i) {
         ast_stmt_t *stmt = co_expr->args_copy_stmts->take[i];
@@ -1319,7 +1388,13 @@ static type_t infer_async(module_t *m, ast_expr_t *expr, type_t target_type) {
     infer_right_expr(m, co_expr->flag_expr, type_kind_new(TYPE_INT));
 
     // check infer call
-    infer_call(m, co_expr->origin_call, type_kind_new(TYPE_UNKNOWN), false);
+    if (m->is_x) {
+        // the call runs in the go closure, which is .n code, so it is not a call from the .x fn
+        infer_call_args(m, co_expr->origin_call, type_fn);
+        co_expr->origin_call->return_type = type_fn->return_type;
+    } else {
+        infer_call(m, co_expr->origin_call, type_kind_new(TYPE_UNKNOWN), false);
+    }
 
     // check origin
     type_t fn_type = co_expr->origin_call->left.type;
@@ -1336,7 +1411,7 @@ static type_t infer_async(module_t *m, ast_expr_t *expr, type_t target_type) {
     }
 
     // 快速线路: 无参数，无返回值处理，无挟持外部变量，可以作为纯函数进行快速 coroutine 触发
-    if (m->in_fake_stmt && is_errable_void && co_expr->origin_call->args->length == 0 &&
+    if (m->fake_stmt_expr && is_errable_void && co_expr->origin_call->args->length == 0 &&
         co_expr->closure_fn_void->capture_exprs->length == 0) {
         // 清空两个 fn body, 避免 infer void 异常
         co_expr->closure_fn->body = slice_new();
@@ -1347,8 +1422,12 @@ static type_t infer_async(module_t *m, ast_expr_t *expr, type_t target_type) {
     // -------------------------------------------- 消除 ast_async_t, 直接改造成 call async----------------------------------------------------------
     ast_expr_t first_arg = {0};
 
+    // a go statement in .x keeps no future, .x code could never free one it does not hold
+    bool x_stmt = m->is_x && m->fake_stmt_expr == expr;
+
     // 如果原有的 go xxx() 没有参数和返回值，则直接使用原有版本的 origin call 传递给 async, 不需要包裹
-    if (is_errable_void && co_expr->origin_call->args->length == 0) {
+    // .x keeps the closure: a fn used as a value needs fn_new, which allocates from the gc
+    if (!m->is_x && is_errable_void && co_expr->origin_call->args->length == 0) {
         first_arg = co_expr->origin_call->left; // 直接使用 left call fn ident, 而不是使用闭包
 
         // 清空两个 fn body, 避免 infer void 异常
@@ -1366,7 +1445,8 @@ static type_t infer_async(module_t *m, ast_expr_t *expr, type_t target_type) {
             .target_type = co_expr->closure_fn->type,
         };
 
-        if (co_expr->return_type.kind == TYPE_VOID) {
+        // without a future the result has nowhere to go, so the void closure drops it
+        if (co_expr->return_type.kind == TYPE_VOID || x_stmt) {
             first_arg.value = co_expr->closure_fn_void;
 
             // 清空 closure_fn body, 避免 infer 异常, linear 才会剔除多余的 closure
@@ -1376,16 +1456,33 @@ static type_t infer_async(module_t *m, ast_expr_t *expr, type_t target_type) {
         }
     }
 
+    char *async_ident = BUILTIN_CALL_ASYNC;
+    if (m->is_x) {
+        // the closure is .n code, an xfn param cannot take it, so it goes to std/builtin/coroutine.x as a pointer
+        ast_as_expr_t *as_expr = NEW(ast_as_expr_t);
+        as_expr->src = first_arg;
+        as_expr->target_type = type_kind_new(TYPE_ANYPTR);
+        first_arg = (ast_expr_t) {
+                .line = expr->line,
+                .column = expr->column,
+                .assert_type = AST_EXPR_AS,
+                .value = as_expr,
+        };
+        async_ident = x_stmt ? BUILTIN_CALL_X_GO : BUILTIN_CALL_X_ASYNC;
+    }
+
     ast_call_t *call_expr = NEW(ast_call_t);
-    call_expr->left = *ast_ident_expr(expr->line, expr->column, BUILTIN_CALL_ASYNC);
+    call_expr->left = *ast_ident_expr(expr->line, expr->column, async_ident);
 
     call_expr->args = ct_list_new(sizeof(ast_expr_t));
     ct_list_push(call_expr->args, &first_arg); // ast_fndef
     ct_list_push(call_expr->args, co_expr->flag_expr);
 
     // 泛型参数
-    call_expr->generics_args = ct_list_new(sizeof(type_t));
-    ct_list_push(call_expr->generics_args, &co_expr->return_type);
+    if (!x_stmt) {
+        call_expr->generics_args = ct_list_new(sizeof(type_t));
+        ct_list_push(call_expr->generics_args, &co_expr->return_type);
+    }
 
     ast_expr_t *new_call_expr = NEW(ast_expr_t);
     new_call_expr->line = expr->line;
@@ -3046,9 +3143,9 @@ static type_t infer_tagged_union_new(module_t *m, ast_expr_t *expr, type_t targe
 }
 
 void infer_expr_fake(module_t *m, ast_expr_fake_stmt_t *stmt) {
-    m->in_fake_stmt = true;
+    m->fake_stmt_expr = &stmt->expr;
     infer_right_expr(m, &stmt->expr, type_kind_new(TYPE_UNKNOWN));
-    m->in_fake_stmt = false;
+    m->fake_stmt_expr = NULL;
     if (stmt->expr.assert_type == AST_MATCH && stmt->expr.type.kind == TYPE_UNKNOWN) {
         stmt->expr.type = type_kind_new(TYPE_VOID);
         stmt->expr.target_type = type_kind_new(TYPE_VOID);

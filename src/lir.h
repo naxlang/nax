@@ -137,6 +137,7 @@
 #define RT_CALL_STRING_REF "rt_string_ref" // 默认引用传递
 
 #define RT_CALL_GC_MALLOC "gc_malloc"
+#define RT_CALL_MALLOC "malloc" // libc, memory the gc does not see
 
 #define RT_CALL_RUNTIME_EVAL_GC "runtime_eval_gc"
 
@@ -158,6 +159,8 @@
 
 #define BUILTIN_CALL_ASYNC "async"
 #define BUILTIN_CALL_CO_RETURN "co_return"
+#define BUILTIN_CALL_X_ASYNC "x_async" // go in .x, std/builtin/coroutine.x
+#define BUILTIN_CALL_X_GO "x_go" // go statement in .x, no future
 
 #define BUILTIN_CALL_VEC_NEW "vec_new"
 
