@@ -102,7 +102,7 @@ fn main() {
 nax 42
 ```
 
-`.n` 代码可以 import 并调用 `.x` 代码；`.x` 代码不能调用 `.n` 函数。在 `.x` 中可以使用内置函数（print、println、panic、assert）、`libc` 和 `allocator`。捕获变量的闭包、作为值使用的函数、`go`、`chan` 和 `select` 会在编译期报错。
+业务代码继续用 `.n` 编写，需要手动管理内存的部分放进 `.x`，`.n` 代码可以像普通模块一样 import 并调用它们。
 
 ## 文档  
 

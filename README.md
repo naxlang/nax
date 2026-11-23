@@ -105,7 +105,7 @@ fn main() {
 nax 42
 ```
 
-`.n` code can import and call `.x` code; `.x` code cannot call `.n` functions. From `.x` you can use the builtins (print, println, panic, assert), `libc` and `allocator`. Closures that capture, functions used as values, `go`, `chan` and `select` are rejected at compile time.
+Application code stays in `.n`, and the parts that need to manage memory by hand go into `.x`. `.n` code imports and calls them like any other module.
 
 ## Documentation  
   
