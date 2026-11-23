@@ -801,6 +801,8 @@ coroutine_t *rt_coroutine_new(void *fn, int64_t flag, n_future_t *fu, void *arg)
     co->panic_msg = NULL;
     co->traces = (n_vec_t){0};
     co->await_co = NULL;
+    // a zeroed pthread mutex does not lock on darwin, and rt_coroutine_await may wait on this one
+    mutex_init(&co->dead_locker, false);
     co->aco.inited = 0; // 标记为为初始化
 
     return co;
