@@ -27,13 +27,4 @@ pub fn co_return<T>(ptr<T> result) {
     utils.coroutine_return(result as anyptr)
 }
 
-// coroutine_await fails with the errset the coroutine failed with
-#where T:nonvoid
-pub fn future_t<T>.await(&self):T! {
-    utils.coroutine_await(self as anyptr)
-    return *self.result
-}
-
-pub fn future_t<T>.await_void(&self):void! {
-    utils.coroutine_await(self as anyptr)
-}
+// await and await_void are in coroutine.x, so a future can be awaited from .n and .x alike

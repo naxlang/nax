@@ -259,6 +259,11 @@ NO_OPTIMIZE static void coroutine_wrapper() {
     } else {
         n_fn_t *runtime_fn = co->fn;
         result = ((env_errable_fn_t) runtime_fn->fn_addr)(runtime_fn->envs);
+
+        // a go in .x builds its closure outside the gc heap, in one malloc block the coroutine owns
+        if (!in_heap((addr_t) runtime_fn)) {
+            free(runtime_fn);
+        }
     }
     uint32_t errset = result.tag == hash_string(ERRABLE_ERROR_TAG) ? result.errset : 0;
 
@@ -281,6 +286,9 @@ NO_OPTIMIZE static void coroutine_wrapper() {
 
         co_set_status(p, await_co, CO_STATUS_RUNNABLE);
         rt_linked_fixalloc_push(&await_co->p->runnable_list, await_co);
+    } else if (co->await_cond) {
+        // a thread that runs no coroutine (main in .x) waits in rt_coroutine_await
+        pthread_cond_signal(co->await_cond);
     } else {
         if (errset) {
             coroutine_dump_error(co, errset);
@@ -508,10 +516,6 @@ static void processor_wake(n_processor_t *p) {
 }
 
 void rt_coroutine_dispatch(coroutine_t *co) {
-    // lazy init: an x mode binary that dispatches a coroutine still needs fn mode deps
-    // fn_mode_init 内部有原子锁判断，重复调用安全
-    fn_depend_init(false);
-
     DEBUGF("[runtime.rt_coroutine_dispatch] co=%p, fn=%p, share_processor_count=%d", co, co->fn, cpu_count);
 
     // 分配 coroutine 之前需要给 coroutine 确认初始颜色, 如果是新增的 coroutine，默认都是黑色
@@ -767,6 +771,10 @@ void mark_ptr_black(void *value) {
  * @return
  */
 coroutine_t *rt_coroutine_new(void *fn, int64_t flag, n_future_t *fu, void *arg) {
+    // lazy init: the first go of a binary whose main is in .x brings up the runtime
+    // fn_mode_init 内部有原子锁判断，重复调用安全
+    fn_depend_init(false);
+
     mutex_lock(&cp_alloc_locker);
     coroutine_t *co = fixalloc_alloc(&coroutine_alloc);
     co->id = coroutine_count++;
@@ -801,6 +809,9 @@ coroutine_t *rt_coroutine_new(void *fn, int64_t flag, n_future_t *fu, void *arg)
     co->panic_msg = NULL;
     co->traces = (n_vec_t){0};
     co->await_co = NULL;
+    co->await_cond = NULL;
+    // a zeroed pthread mutex does not lock on darwin, and rt_coroutine_await may wait on this one
+    mutex_init(&co->dead_locker, false);
     co->aco.inited = 0; // 标记为为初始化
 
     return co;
@@ -1096,6 +1107,26 @@ n_errable_t rt_coroutine_await(n_future_t *fu) {
     coroutine_t *target_co = fu->await_co;
     mutex_lock(&target_co->dead_locker);
     coroutine_t *src_co = coroutine_get();
+
+    // main in .x awaits on a thread that runs no coroutine, so the thread blocks until coroutine_wrapper wakes it
+    if (!src_co) {
+        pthread_cond_t cond;
+        pthread_cond_init(&cond, NULL);
+        target_co->await_cond = &cond;
+        while (target_co->status != CO_STATUS_DEAD) {
+            pthread_cond_wait(&cond, &target_co->dead_locker.locker);
+        }
+        target_co->await_cond = NULL;
+        mutex_unlock(&target_co->dead_locker);
+        pthread_cond_destroy(&cond);
+
+        // no coroutine carries the errset, so it goes into the errable directly
+        if (fu->error) {
+            return (n_errable_t) {.tag = hash_string(ERRABLE_ERROR_TAG), .errset = fu->error};
+        }
+        return (n_errable_t) {.tag = hash_string(ERRABLE_VALUE_TAG), .value = 0};
+    }
+
     if (target_co->status == CO_STATUS_DEAD) {
         mutex_unlock(&target_co->dead_locker);
         src_co->errset = fu->error;

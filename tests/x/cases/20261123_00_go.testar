@@ -1,0 +1,140 @@
+=== test_x_go
+--- main.x
+import "util.n"
+import libc
+
+fn main() {
+    var p = util.point_t{x: 3, y: 4}
+    var fu = go util.dist(p, 10)
+    var d = fu.await() catch e {
+        -1
+    }
+    fu.deinit()
+    println(d)
+
+    var fe = go util.div(10, 0)
+    var q = fe.await() catch e {
+        println('caught', e == util.DIVISOR_ZERO, e.msg())
+        -1
+    }
+    fe.deinit()
+    println(q)
+
+    // a go statement keeps no future
+    ptr<int> cell = libc.calloc(1, 8) as ptr<int>
+    go util.store(cell, 42)
+    var fw = go util.watch(cell)
+    fw.await_void() catch e {
+        println('watch', e.msg())
+    }
+    fw.deinit()
+    println(*cell)
+    libc.free(cell as anyptr)
+}
+--- util.n
+import co
+
+pub errdef DIVISOR_ZERO 'divisor is zero'
+
+pub type point_t = struct{
+    int x
+    int y
+}
+
+pub fn dist(point_t p, int k):int {
+    co.sleep(10)
+    return p.x * p.x + p.y * p.y + k
+}
+
+pub fn div(int a, int b):int! {
+    co.sleep(50)
+    if b == 0 {
+        throw DIVISOR_ZERO
+    }
+    return a / b
+}
+
+pub fn store(ptr<int> p, int v) {
+    *p = v
+}
+
+pub fn watch(ptr<int> p) {
+    for *p == 0 {
+        co.sleep(1)
+    }
+}
+--- output.txt
+35
+caught true divisor is zero
+-1
+42
+
+=== test_x_go_from_n
+--- main.n
+import "lib.x"
+
+fn main() {
+    var s = 'parked'
+    for i in 0..100 {
+        s += '.'
+    }
+    var r = lib.relay(5)
+    println(r, s.len())
+}
+--- lib.x
+import "util.n"
+
+// await yields the coroutine of main with the .x frames still on its stack
+pub fn relay(int n):int {
+    var fu = go util.churn(n)
+    var r = fu.await() catch e {
+        -1
+    }
+    fu.deinit()
+    return r
+}
+--- util.n
+import co
+import runtime
+
+// the gc runs while main is parked, its string survives only if the stack walk gets past the .x frames
+pub fn churn(int n):int {
+    int total = 0
+    for i in 0..n {
+        for j in 0..1000 {
+            [int] list = [i, j]
+            total += list.len()
+        }
+        runtime.gc()
+        co.sleep(10)
+    }
+    return total
+}
+--- output.txt
+10000 106
+
+=== test_x_go_x_fn
+--- main.x
+fn work(int a):int {
+    return a
+}
+
+fn main() {
+    var fu = go work(1)
+}
+--- output.txt
+nax-test/main.x:6:20: go in .x can only start a .n fn, 'work' is .x
+
+=== test_x_go_gc_arg
+--- main.x
+import "util.n"
+
+fn main() {
+    var fu = go util.size('nax')
+}
+--- util.n
+pub fn size(string s):int {
+    return s.len()
+}
+--- output.txt
+nax-test/main.x:4:21: go in .x cannot pass or return gc type 'string'

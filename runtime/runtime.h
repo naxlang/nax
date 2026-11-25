@@ -419,6 +419,7 @@ struct coroutine_t {
     n_future_t *future;
 
     struct coroutine_t *await_co; // 可能为 null, 如果不为 null 说明该 co 在等待当前 co exit
+    pthread_cond_t *await_cond; // set while a thread that runs no coroutine (main in .x) waits for this co to exit
     mutex_t dead_locker;
 
     // 当前 coroutine stack 颜色是否为黑色, 黑色说明当前 goroutine stack 已经扫描完毕

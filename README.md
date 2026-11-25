@@ -1,3 +1,5 @@
+<p align="center"><img src="nls/assets/nax-lang-icon.svg" width="120" alt="Nax logo"></p>
+
 # Nax Programming Language  
   
 A general-purpose system programming language and compiler, designed to build high-performance, safe and reliable, and cross-platform software in a concise and elegant way.
@@ -5,13 +7,14 @@ A general-purpose system programming language and compiler, designed to build hi
 ## Features
 
 - Lightweight, concise, and consistent syntax design, easy to master and get started quickly
-- Strong type system, static analysis and compilation, memory safety, exception handling, making it easy to write secure and reliable software
+- Strong type system, static analysis and compilation, memory safety, and errors as values with errdef and catch, making it easy to write secure and reliable software
 - Built-in concurrency primitives: go/future/channel/select
 - Comprehensive type system supporting generics, enum, tagged union, interface, nullable(?), errable(!)
 - Compiles directly to machine code for the target platform, does not rely on LLVM, and supports cross-compilation.
 - Simple deployment and efficient compilation with bundled target sysroots and statically linked third-party runtimes
 - High-performance C FFI implementation with zero-overhead calls to C standard library functions
 - High-performance GC implementation with very short STW (Stop The World)
+- Two run modes chosen by file suffix: `.n` files run with a GC, `.x` files run without GC or runtime and manage memory through allocators
 - High-performance memory allocator implementation, referencing tcmalloc
 - High-performance shared-stack coroutine implementation, capable of millions of coroutine switches per second
 - High-performance IO based on libuv implementation
@@ -25,7 +28,7 @@ A general-purpose system programming language and compiler, designed to build hi
 
 > nax was formerly known as nature and has been renamed to nax.
 
-The nax programming language has reached an early usable version, and its core syntax features are now in place. Key features still to be completed include unsafe runtime mode, LLM coding adaptation, C target adaptation, and WASM3.0 target adaptation.
+The nax programming language has reached an early usable version, and its core syntax features are now in place. The GC-free run mode for `.x` files is available as a first version. Key features still to be completed include LLM coding adaptation, the C target and the WASM 3.0 target.
 
 The current version supports compilation for the following targets: linux_amd64, linux_arm64, linux_riscv64, darwin_amd64, darwin_arm64, and windows_amd64.
 
@@ -75,79 +78,37 @@ This produces `main.exe` using Nax's built-in COFF/PE linker and bundled
 Windows sysroot. Clang, LLD, MSVC, the Windows SDK, MinGW, and Zig are not
 required on the final-user build path.
 
-## Formatting
+## Run modes
 
-Nax ships with one canonical formatter style. The formatter is convention-over-configuration: there are no style profiles or user-tunable formatting rules.
+Nax has two run modes, chosen by the file suffix. `.n` files run with a GC, and the whole runtime is scheduled through coroutines, which suits most applications. `.x` files run without a GC or coroutines, and memory is managed by hand, which suits performance-critical applications.
 
-The same formatter core is exposed through both the CLI and the language server:
+`.n` and `.x` can import each other. `.n` calls `.x` functions directly, while `.x` can only call `.n` through `go`, which starts a coroutine. The future that `go` returns carries the result back to the `.x` code.
 
-- `nax fmt` is the user-facing toolchain command
-- `nls fmt` is the underlying formatter command used by the language server and wrapper
-- editor formatting uses the same canonical output through LSP `textDocument/formatting`
-
-### CLI usage
-
-Print formatted output to stdout:
-
-```sh
-nax fmt < path/to/file.n
-nls fmt < path/to/file.n
-
-nax fmt path/to/file.n
-nls fmt path/to/file.n
+```js
+// util.n
+pub fn sum(int n):int {
+    int total = 0
+    for int i = 1; i <= n; i += 1 {
+        total += i
+    }
+    return total
+}
 ```
 
-Directories are supported and are walked recursively for `.n` files:
+```js
+// main.x
+import 'util.n'
 
-```sh
-nax fmt src/
-nls fmt src/
+fn main() {
+    var fu = go util.sum(100)
+    var total = fu.await() catch e {
+        -1
+    }
+    fu.deinit() // a future in .x is freed by hand
+    println(total) // 5050
+}
 ```
 
-Write formatted output back to the file in place:
-
-```sh
-nax fmt -w path/to/file.n
-nls fmt --write path/to/file.n
-```
-
-Check whether files are already formatted. This exits with status `1` if any file would change:
-
-```sh
-nax fmt --check path/to/file.n
-nls fmt --check path/to/file.n
-```
-
-Show a unified diff instead of rewriting files. This also exits with status `1` if any file would change:
-
-```sh
-nax fmt --diff path/to/file.n
-nls fmt --diff path/to/file.n
-```
-
-List files whose formatting differs from the canonical style:
-
-```sh
-nax fmt -l src/
-nls fmt -l src/
-```
-
-Report all lexer errors instead of only the first one:
-
-```sh
-nax fmt -e path/to/file.n
-nls fmt -e path/to/file.n
-```
-
-Notes:
-
-- default mode prints formatted output to stdout and does not modify files
-- if no path is provided, the formatter reads from stdin
-- directory inputs are walked recursively and only `.n` files are formatted
-- `--write` cannot be combined with `--check` or `--diff`
-- formatting invalid syntax is not supported; formatter errors are reported instead of producing best-effort output
-- formatter output is intended to be stable and idempotent
-  
 ## Documentation  
   
 Quick start https://naxlang.org/docs/get-started
@@ -162,7 +123,7 @@ Try in browser https://naxlang.org/playground
 
 MySQL/PostgreSQL/Redis drivers https://github.com/weiwenhao/dbdriver
 
-SQLite driver https://github.com/weiwenhao/nax-sqlite
+SQLite driver https://github.com/weiwenhao/nature-sqlite
 
 API Framework https://github.com/weiwenhao/emoji-api
 
@@ -172,7 +133,7 @@ Llama2 inference model implementation https://github.com/weiwenhao/llama.n
 
 Tetris implementation based on raylib https://github.com/weiwenhao/tetris
 
-Nax WebView Package https://github.com/wzzc-dev/nax-webview
+Nax WebView Package https://github.com/wzzc-dev/nature-webview
 
 More syntax examples https://github.com/naxlang/nax/tree/master/tests/features/cases
 
@@ -181,7 +142,7 @@ More syntax examples https://github.com/naxlang/nax/tree/master/tests/features/c
 
 The Nax programming language is a lightweight, simple, and easy-to-learn programming language that references golang in terms of design philosophy and runtime architecture.
 
-Nax focuses on memory safety in its syntax design, has comprehensive type system support and convenient error handling methods, uses files as module units, and adopts a centralized package management approach based on package.toml.
+Nax focuses on memory safety in its syntax design, has comprehensive type system support and convenient error handling methods, uses files, or directories declared with `mod`, as module units, and adopts a centralized package management approach based on package.toml.
 
 Nax natively supports concurrency primitive go+select+channel, which has excellent concurrency performance in highly concurrent IO applications. Performance will be further improved when the official version is released.
 
@@ -254,4 +215,4 @@ TODO  https://github.com/naxlang/nax/issues/131
   
 ## License  
   
-The source code for the compiler frontend, backend, and runtime of this project is restricted by the Apache License (Version 2.0). Nax source files (.n) such as standard libraries included in the current project use the MIT license.
+The source code for the compiler frontend, backend, and runtime of this project is restricted by the Apache License (Version 2.0). Nax source files (.n and .x) such as standard libraries included in the current project use the MIT license.
