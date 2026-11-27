@@ -587,6 +587,41 @@ static linked_t *amd64_windows_lower_args(closure_t *c, lir_op_t *op) {
     return result;
 }
 
+/**
+ * The operand that is moved into the register of a bool, i8/u8 or i16/u16 argument, extended to 32 bits (zero for a bool and
+ * the unsigned types, sign for the signed ones). The callee may be C built by clang (the runtime, libc), and clang reads such
+ * a parameter from the whole 32 bit register, it relies on the caller to have extended the value (rt_assert tests edi, not
+ * dil). A byte or word move would leave the upper bits as they were.
+ * @return an operand of the type wide_kind
+ */
+static lir_operand_t *amd64_extend_narrow_arg(closure_t *c, linked_t *list, lir_operand_t *arg, type_kind src_kind,
+                                              type_kind wide_kind) {
+    if (arg->assert_type == LIR_OPERAND_IMM) {
+        // movzx and movsx have no immediate form, so the constant itself is widened
+        lir_imm_t *src = arg->value;
+        lir_imm_t *imm = NEW(lir_imm_t);
+        imm->kind = wide_kind;
+        if (src_kind == TYPE_INT8) {
+            imm->int_value = (int8_t) src->int_value;
+        } else if (src_kind == TYPE_INT16) {
+            imm->int_value = (int16_t) src->int_value;
+        } else if (src_kind == TYPE_UINT16) {
+            imm->uint_value = (uint16_t) src->uint_value;
+        } else {
+            imm->uint_value = (uint8_t) src->uint_value; // bool and u8
+        }
+
+        lir_operand_t *operand = NEW(lir_operand_t);
+        operand->assert_type = LIR_OPERAND_IMM;
+        operand->value = imm;
+        return operand;
+    }
+
+    lir_operand_t *wide = lower_temp_var_operand(c, list, type_kind_new(wide_kind));
+    linked_push(list, is_signed(src_kind) ? lir_op_sext(wide, arg) : lir_op_uext(wide, arg));
+    return wide;
+}
+
 static linked_t *amd64_lower_args(closure_t *c, lir_op_t *op) {
     if (amd64_windows_abi()) {
         return amd64_windows_lower_args(c, op);
@@ -763,10 +798,17 @@ static linked_t *amd64_lower_args(closure_t *c, lir_op_t *op) {
         } else {
             assertf(count == 1, "the normal type uses only one register");
             lir_operand_t *lo_temp_var;
+            lir_operand_t *move_src = arg;
             if (lo == AMD64_CLASS_INTEGER) {
                 uint8_t reg_index = int_reg_indices[int_reg_index++];
-                reg_t *hint_reg = reg_select(reg_index, arg_type.map_imm_kind);
-                lo_temp_var = lower_temp_var_with_hint(c, result, arg_type, hint_reg);
+                type_t temp_type = arg_type;
+                if (arg_type.storage_size < DWORD) {
+                    type_kind wide_kind = is_signed(arg_type.map_imm_kind) ? TYPE_INT32 : TYPE_UINT32;
+                    move_src = amd64_extend_narrow_arg(c, result, arg, arg_type.map_imm_kind, wide_kind);
+                    temp_type = type_kind_new(wide_kind);
+                }
+                reg_t *hint_reg = reg_select(reg_index, temp_type.map_imm_kind);
+                lo_temp_var = lower_temp_var_with_hint(c, result, temp_type, hint_reg);
             } else if (lo == AMD64_CLASS_SSE) {
                 uint8_t reg_index = sse_reg_indices[sse_reg_index++];
                 reg_t *hint_reg = reg_select(reg_index, arg_type.map_imm_kind);
@@ -774,7 +816,7 @@ static linked_t *amd64_lower_args(closure_t *c, lir_op_t *op) {
             } else {
                 assert(false);
             }
-            linked_push(result, lir_op_call_arg_move(lo_temp_var, arg));
+            linked_push(result, lir_op_call_arg_move(lo_temp_var, move_src));
             slice_push(use_regs, lo_temp_var->value);
         }
     }
