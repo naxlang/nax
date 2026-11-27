@@ -1,0 +1,71 @@
+=== test_global_read_modify_write
+--- main.n
+var counter = 0
+var state = 0 as u64
+var small = 0 as u32
+
+// every statement has to read what the one before it stored
+fn add_three() {
+    counter += 1
+    counter += 2
+    counter += 3
+}
+
+fn step(u64 x):u64 {
+    x ^= x >> 12
+    x ^= x << 25
+    x ^= x >> 27
+    return x
+}
+
+fn step_global() {
+    state ^= state >> 12
+    state ^= state << 25
+    state ^= state >> 27
+}
+
+fn mix_small(u32 x):u32 {
+    x ^= x >> 12
+    x ^= x << 5
+    x ^= x >> 17
+    return x
+}
+
+fn mix_small_global() {
+    small ^= small >> 12
+    small ^= small << 5
+    small ^= small >> 17
+}
+
+fn main() {
+    add_three()
+    println('counter', counter)
+
+    var local = 88172645463325252 as u64
+    state = local
+    bool state_same = true
+    for int i = 0; i < 8; i += 1 {
+        local = step(local)
+        step_global()
+        if state != local {
+            state_same = false
+        }
+    }
+    println('state', state, state_same)
+
+    var local_small = 2463534242 as u32
+    small = local_small
+    bool small_same = true
+    for int i = 0; i < 8; i += 1 {
+        local_small = mix_small(local_small)
+        mix_small_global()
+        if small != local_small {
+            small_same = false
+        }
+    }
+    println('small', small, small_same)
+}
+--- output.txt
+counter 6
+state 7814176031692112141 true
+small 3457086171 true

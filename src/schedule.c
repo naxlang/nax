@@ -29,14 +29,20 @@ static reg_t *reg_alloc_find(reg_t *reg) {
 }
 
 /**
+ * An operand that names memory: an indirect addr, or a symbol var (a global variable). arm64 and riscv64 rewrite every
+ * symbol var into lea + indirect addr before scheduling, amd64 keeps it as a direct rip-relative operand, so it has to
+ * count as memory here or the loads and stores of a global would be reordered against each other.
+ */
+static bool schedule_is_mem_operand(lir_operand_t *operand) {
+    return operand && (operand->assert_type == LIR_OPERAND_INDIRECT_ADDR || operand->assert_type == LIR_OPERAND_SYMBOL_VAR);
+}
+
+/**
  * 判断指令是否是内存读取操作
  */
 bool schedule_is_mem_read(lir_op_t *op) {
-    // 从 indirect_addr 读取数据
-    if (op->first && op->first->assert_type == LIR_OPERAND_INDIRECT_ADDR) {
-        return true;
-    }
-    if (op->second && op->second->assert_type == LIR_OPERAND_INDIRECT_ADDR) {
+    // read from an indirect addr or a symbol var
+    if (schedule_is_mem_operand(op->first) || schedule_is_mem_operand(op->second)) {
         return true;
     }
     // CALL 和 RT_CALL 可能读取内存
@@ -50,8 +56,8 @@ bool schedule_is_mem_read(lir_op_t *op) {
  * 判断指令是否是内存写入操作
  */
 bool schedule_is_mem_write(lir_op_t *op) {
-    // 写入 indirect_addr
-    if (op->output && op->output->assert_type == LIR_OPERAND_INDIRECT_ADDR) {
+    // write to an indirect addr or a symbol var
+    if (schedule_is_mem_operand(op->output)) {
         return true;
     }
     // CALL 和 RT_CALL 可能写入内存
