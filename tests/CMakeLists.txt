@@ -441,3 +441,7 @@ endif ()
 add_executable(test_amd64_windows_abi test_amd64_windows_abi.c)
 target_link_libraries(test_amd64_windows_abi nax_common_test m)
 add_test(test_amd64_windows_abi test_amd64_windows_abi)
+
+add_executable(test_amd64_narrow_args test_amd64_narrow_args.c)
+target_link_libraries(test_amd64_narrow_args nax_common_test m)
+add_test(test_amd64_narrow_args test_amd64_narrow_args)

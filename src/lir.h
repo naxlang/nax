@@ -1370,6 +1370,16 @@ static inline bool lir_can_mov_eliminable(lir_opcode_t code) {
 }
 
 
+/**
+ * Check if an opcode may sit in the group of '~' ops that sets up the arguments of a call. The group is resolved as one
+ * parallel move: besides the ops that can be coalesced with a move, an extension may be in it, it writes an argument
+ * register from a narrower source in a single instruction.
+ */
+static inline bool lir_can_call_arg_op(lir_opcode_t code) {
+    return lir_can_mov_eliminable(code) || code == LIR_OPCODE_UEXT || code == LIR_OPCODE_SEXT;
+}
+
+
 static inline bool lir_op_factor(lir_op_t *op) {
     return op->code == LIR_OPCODE_UDIV ||
            op->code == LIR_OPCODE_MUL ||
