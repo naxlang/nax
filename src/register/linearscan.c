@@ -232,7 +232,7 @@ void mark_number(closure_t *c) {
                 // resolve_char 的下一个 op 必须是 mov 或者 call
                 if (current->succ) {
                     lir_op_t *succ = current->succ->value;
-                    assert(lir_op_call(succ) || lir_can_mov_eliminable(succ->code));
+                    assert(lir_op_call(succ) || lir_can_call_arg_op(succ->code));
                     if (!lir_op_call(succ)) {
                         assert(succ->resolve_char == '~');
                     }

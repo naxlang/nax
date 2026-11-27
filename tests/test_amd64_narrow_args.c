@@ -48,52 +48,48 @@ static linked_t *test_lower_call_with_arg(lir_operand_t *arg) {
     return amd64_lower_call(closure, call);
 }
 
-// the one call argument move of the lowered call: the destination is a variable hinted to the first argument register
-static bool check_arg_move(linked_t *lowered, type_kind want_kind, lir_operand_t **src) {
-    lir_op_t *move = NULL;
+// the one '~' op of the lowered call, the one that sets the first argument register: its output is a variable hinted to rdi
+static lir_op_t *find_arg_op(linked_t *lowered) {
+    lir_op_t *arg_op = NULL;
     LINKED_FOR(lowered) {
         lir_op_t *op = node->value;
-        if (op->code == LIR_OPCODE_MOVE && op->resolve_char == '~') {
-            NARROW_ARGS_CHECK(move == NULL);
-            move = op;
+        if (op->resolve_char == '~') {
+            if (arg_op != NULL) {
+                return NULL;
+            }
+            arg_op = op;
         }
     }
-    NARROW_ARGS_CHECK(move != NULL);
-    NARROW_ARGS_CHECK(move->output->assert_type == LIR_OPERAND_VAR);
+    return arg_op;
+}
 
-    lir_var_t *dst = move->output->value;
+static bool check_arg_reg(lir_op_t *arg_op, type_kind want_kind, uint8_t want_size) {
+    NARROW_ARGS_CHECK(arg_op->output->assert_type == LIR_OPERAND_VAR);
+    lir_var_t *dst = arg_op->output->value;
     NARROW_ARGS_CHECK(dst->type.kind == want_kind);
     NARROW_ARGS_CHECK(dst->must_hint != NULL);
     NARROW_ARGS_CHECK(dst->must_hint->index == rdi->index);
-    NARROW_ARGS_CHECK(dst->must_hint->size == DWORD);
-    *src = move->first;
+    NARROW_ARGS_CHECK(dst->must_hint->size == want_size);
     return true;
 }
 
+// the extension is the argument op itself: one instruction into the argument register, no extra move
 static bool check_narrow_var_arg(type_kind arg_kind, type_kind want_kind, lir_opcode_t want_ext) {
     lir_var_t *var = test_var("arg", type_kind_new(arg_kind));
     lir_operand_t *arg = operand_new(LIR_OPERAND_VAR, var);
     linked_t *lowered = test_lower_call_with_arg(arg);
 
-    lir_operand_t *move_src = NULL;
-    NARROW_ARGS_CHECK(check_arg_move(lowered, want_kind, &move_src));
+    lir_op_t *arg_op = find_arg_op(lowered);
+    NARROW_ARGS_CHECK(arg_op != NULL);
+    NARROW_ARGS_CHECK(arg_op->code == want_ext);
+    NARROW_ARGS_CHECK(lir_operand_equal(arg_op->first, arg));
+    NARROW_ARGS_CHECK(check_arg_reg(arg_op, want_kind, DWORD));
 
-    // the extension of the argument comes first, and what is moved into the register is its result
-    lir_op_t *ext = NULL;
+    // and nothing else is added besides it and the call
     LINKED_FOR(lowered) {
         lir_op_t *op = node->value;
-        if (op->code == LIR_OPCODE_UEXT || op->code == LIR_OPCODE_SEXT) {
-            NARROW_ARGS_CHECK(ext == NULL);
-            ext = op;
-        }
+        NARROW_ARGS_CHECK(op == arg_op || op->code == LIR_OPCODE_CALL);
     }
-    NARROW_ARGS_CHECK(ext != NULL);
-    NARROW_ARGS_CHECK(ext->code == want_ext);
-    NARROW_ARGS_CHECK(lir_operand_equal(ext->first, arg));
-    NARROW_ARGS_CHECK(ext->output->assert_type == LIR_OPERAND_VAR);
-    NARROW_ARGS_CHECK(lir_operand_equal(ext->output, move_src));
-    lir_var_t *wide = ext->output->value;
-    NARROW_ARGS_CHECK(wide->type.kind == want_kind);
     return true;
 }
 
@@ -125,10 +121,12 @@ static bool check_narrow_imm_arg(lir_operand_t *arg, type_kind want_kind, int64_
         NARROW_ARGS_CHECK(op->code != LIR_OPCODE_UEXT && op->code != LIR_OPCODE_SEXT);
     }
 
-    lir_operand_t *move_src = NULL;
-    NARROW_ARGS_CHECK(check_arg_move(lowered, want_kind, &move_src));
-    NARROW_ARGS_CHECK(move_src->assert_type == LIR_OPERAND_IMM);
-    lir_imm_t *imm = move_src->value;
+    lir_op_t *arg_op = find_arg_op(lowered);
+    NARROW_ARGS_CHECK(arg_op != NULL);
+    NARROW_ARGS_CHECK(arg_op->code == LIR_OPCODE_MOVE);
+    NARROW_ARGS_CHECK(check_arg_reg(arg_op, want_kind, DWORD));
+    NARROW_ARGS_CHECK(arg_op->first->assert_type == LIR_OPERAND_IMM);
+    lir_imm_t *imm = arg_op->first->value;
     NARROW_ARGS_CHECK(imm->kind == want_kind);
     NARROW_ARGS_CHECK(imm->int_value == want_value);
     return true;
@@ -148,27 +146,19 @@ static bool test_narrow_constants_are_widened(void) {
 // 32 and 64 bit arguments already fill the register (a 32 bit write clears the upper half), nothing is added for them
 static bool check_wide_arg_unchanged(type_kind kind, uint8_t want_size) {
     lir_var_t *var = test_var("arg", type_kind_new(kind));
-    linked_t *lowered = test_lower_call_with_arg(operand_new(LIR_OPERAND_VAR, var));
+    lir_operand_t *arg = operand_new(LIR_OPERAND_VAR, var);
+    linked_t *lowered = test_lower_call_with_arg(arg);
 
     LINKED_FOR(lowered) {
         lir_op_t *op = node->value;
         NARROW_ARGS_CHECK(op->code != LIR_OPCODE_UEXT && op->code != LIR_OPCODE_SEXT);
     }
 
-    lir_op_t *move = NULL;
-    LINKED_FOR(lowered) {
-        lir_op_t *op = node->value;
-        if (op->code == LIR_OPCODE_MOVE && op->resolve_char == '~') {
-            move = op;
-        }
-    }
-    NARROW_ARGS_CHECK(move != NULL);
-    NARROW_ARGS_CHECK(move->first->assert_type == LIR_OPERAND_VAR);
-    lir_var_t *dst = move->output->value;
-    NARROW_ARGS_CHECK(dst->type.kind == kind);
-    NARROW_ARGS_CHECK(dst->must_hint != NULL);
-    NARROW_ARGS_CHECK(dst->must_hint->index == rdi->index);
-    NARROW_ARGS_CHECK(dst->must_hint->size == want_size);
+    lir_op_t *arg_op = find_arg_op(lowered);
+    NARROW_ARGS_CHECK(arg_op != NULL);
+    NARROW_ARGS_CHECK(arg_op->code == LIR_OPCODE_MOVE);
+    NARROW_ARGS_CHECK(lir_operand_equal(arg_op->first, arg));
+    NARROW_ARGS_CHECK(check_arg_reg(arg_op, kind, want_size));
     return true;
 }
 

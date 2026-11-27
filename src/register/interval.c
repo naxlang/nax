@@ -1909,14 +1909,14 @@ void handle_parallel_moves(closure_t *c) {
             lir_op_t *op = current->value;
             // op->id maybe same, but that is fine.
             // check if is parallel move
-            if (lir_can_mov_eliminable(op->code) && op->resolve_char == '~') {
+            if (lir_can_call_arg_op(op->code) && op->resolve_char == '~') {
                 slice_t *moves = slice_new();
                 int id = op->id;
 
                 // collect all parallel moves with same id
                 while (current->value != NULL) {
                     lir_op_t *next_op = current->value;
-                    if (!lir_can_mov_eliminable(next_op->code) || next_op->resolve_char != '~' || next_op->id != id) {
+                    if (!lir_can_call_arg_op(next_op->code) || next_op->resolve_char != '~' || next_op->id != id) {
                         break;
                     }
 
